@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import java.security.Security
 import kotlin.math.abs
 
 class AudioRecorder(context: Context) {
@@ -21,31 +22,34 @@ class AudioRecorder(context: Context) {
 
     // AudioRecord settings
     private val sampleRate = 44100
+    private var cutoffFrequency = 0f
+    private var amplitudeScaling = 100f
     private val bufferSize = AudioRecord.getMinBufferSize(sampleRate,
         AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
 
-    @SuppressLint("MissingPermission")
     private val audioRecord = if (ActivityCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
         ) != PackageManager.PERMISSION_GRANTED
     ) {
-        // TODO: Consider calling
-        //    ActivityCompat#requestPermissions
-        // here to request the missing permissions, and then overriding
-        //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-        //                                          int[] grantResults)
-        // to handle the case where the user grants the permission. See the documentation
-        // for ActivityCompat#requestPermissions for more details.
         throw SecurityException("Permission to record audio is not granted")
     } else {
-        AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
-        )
+        try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+        } catch (e: SecurityException) {
+            Log.e("AudioRecorder", "Failed to initialize AudioRecord: $e")
+            throw e
+        }
+    }
+
+    fun changeHighPassFilter(cutoffFrequency: Float) {
+        this.cutoffFrequency = cutoffFrequency
     }
 
     // Function to start recording and push the audio data to StateFlow
@@ -60,13 +64,12 @@ class AudioRecorder(context: Context) {
 
                 if (read > 0) {
                     // Push the recorded data into the StateFlow
-                    val cutoffFrequency = 0f  // Cutoff frequency for the high-pass filter
-                    val sampleRate = 44100  // Sample rate of the audio data
                     _audioDataFlow.value = calculateAmplitude(
+                        applyHighPassFilter(
                         shortArrayToFloatArray(
                             byteArrayToShortArray(
                                 buffer.copyOfRange(0, read))
-                        ))
+                        )))
                     Log.d("AudioRecorder", "Amplitude: ${_audioDataFlow.value}")
                 }
             }
@@ -94,7 +97,10 @@ class AudioRecorder(context: Context) {
         }
     }
 
-    fun applyHighPassFilter(input: FloatArray, cutoffFrequency: Float, sampleRate: Int): FloatArray {
+    fun applyHighPassFilter(input: FloatArray): FloatArray {
+        if (cutoffFrequency == 0f) {
+            return input
+        }
         val output = FloatArray(input.size)
         val rc = 1.0f / (cutoffFrequency * 2 * Math.PI)
         val dt = 1.0f / sampleRate
@@ -111,10 +117,13 @@ class AudioRecorder(context: Context) {
 
     fun calculateAmplitude(floatArray: FloatArray): Float {
         return FloatArray(floatArray.size) { i ->
-            abs(floatArray[i].toFloat()) / Short.MAX_VALUE
+            abs(floatArray[i]) * amplitudeScaling / 100f
         }.maxOrNull() ?: 0.0f
     }
 
+    fun changeAmplitudeScaling(chosenValue: Float) {
+        amplitudeScaling = chosenValue
+    }
 
 
 }

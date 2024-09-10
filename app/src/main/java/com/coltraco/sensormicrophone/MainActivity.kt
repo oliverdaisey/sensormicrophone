@@ -2,30 +2,37 @@ package com.coltraco.sensormicrophone
 
 import AudioRecorder
 import android.annotation.SuppressLint
-import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import android.Manifest.permission.RECORD_AUDIO
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import com.coltraco.sensormicrophone.ui.theme.SensormicrophoneTheme
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -33,63 +40,153 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
     @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
     private val RECORD_AUDIO_REQUEST_CODE = 1
 
+    private lateinit var audioRecorder: AudioRecorder
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
 
-        // Check if permission is already granted
-        if (ContextCompat.checkSelfPermission(this, RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            // Permission is not granted, request it
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(RECORD_AUDIO),
-                RECORD_AUDIO_REQUEST_CODE
-            )
-        } else {
-            // Permission is already granted, you can use the microphone here
-            Toast.makeText(this, "Microphone permission already granted", Toast.LENGTH_SHORT).show()
+        // handle microphone permission
+        val requestPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { isGranted: Boolean ->
+            if (isGranted) {
+                Toast.makeText(this, "Permission to record audio is granted", Toast.LENGTH_SHORT)
+                    .show()
+                proceedWithMainApp()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Permission to record audio is not granted",
+                    Toast.LENGTH_SHORT
+                ).show()
+                showFailedPermissionScreen()
+            }
         }
+        requestPermissionLauncher.launch(RECORD_AUDIO)
 
+    }
 
-        val audioRecorder = AudioRecorder(this)
-        runBlocking {
-            Thread.sleep(500)
+    private fun showFailedPermissionScreen() {
+        setContent {
+            SensormicrophoneTheme {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Permission to record audio is not granted", fontSize = 20.sp)
+                }
+            }
         }
-        lifecycleScope.launch {
-            audioRecorder.startRecording()
-        }
+    }
 
-        val nodeManager = NodeManager(audioRecorder.audioDataFlow, lifecycleScope)
+    private fun proceedWithMainApp() {
+
+        audioRecorder = AudioRecorder(this)
 
         setContent {
-            LineGraph(nodeManager = nodeManager)
+
+            LaunchedEffect(Unit) {
+                audioRecorder.startRecording()
+            }
+            val nodeManager = NodeManager(audioRecorder.audioDataFlow, lifecycleScope)
+            var cutoffFrequency by remember { mutableFloatStateOf(0f) }
+            var amplitudeScaling by remember { mutableFloatStateOf(100f) }
+
+            SensormicrophoneTheme {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "Microphone Sensor Testing App",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    LineGraph(
+                        nodeManager = nodeManager,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(400.dp),
+                        rescaling = false
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "Cutoff frequency for high-pass filter",
+                                fontSize = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(5.dp))
+                            Text(
+                                "${cutoffFrequency.roundToInt()}Hz",
+                                fontSize = 25.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Slider(
+                                value = cutoffFrequency, onValueChange = {
+                                    val chosenValue = it
+                                    cutoffFrequency = chosenValue
+                                    audioRecorder.changeHighPassFilter(chosenValue)
+                                }, valueRange = 0f..20000f,
+                                modifier = Modifier.fillMaxWidth(0.9f)
+                            )
+
+                            Spacer(modifier = Modifier.height(20.dp))
+                            Text(
+                                "Amplitude scaling factor",
+                                fontSize = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(5.dp))
+                            Text(
+                                "${amplitudeScaling.roundToInt()}%",
+                                fontSize = 25.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Slider(
+                                value = amplitudeScaling, onValueChange = {
+                                    val chosenValue = it
+                                    amplitudeScaling = chosenValue
+                                    audioRecorder.changeAmplitudeScaling(chosenValue)
+                                }, valueRange = 0f..200f,
+                                modifier = Modifier.fillMaxWidth(0.9f)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(50.dp))
+                }
+            }
         }
     }
 }
+
+const val MAX_READING = 1.0f
 
 /**
  * Manager for nodes of a time series graph. Handles adding new nodes (raw measurements) and updating the nodes for animation.
@@ -102,14 +199,12 @@ class MainActivity : ComponentActivity() {
  * @param coroutineScope: the coroutine scope to run the animation on
  *
  */
-
-const val MAX_READING = 1.0f
 class NodeManager(
     measurementFlow: StateFlow<Float?>? = null,
     coroutineScope: CoroutineScope? = null
 ) {
 
-    val MAX_VALUE: Float = MAX_READING.toFloat()
+    val MAX_VALUE: Float = MAX_READING
     val nodes: MutableStateFlow<List<Node>> = MutableStateFlow(listOf())
 
     init {
@@ -149,7 +244,7 @@ class NodeManager(
 
     /**
      * Add a new node to the list of nodes. Does some work to ensure smooth animation.
-     * @param value: the value of the node
+     * @param measurement: the measurement associated to the node
      * @param maxValue: the maximum value of the graph
      */
     fun addNode(measurement: Float, maxValue: Float = MAX_VALUE) {
@@ -196,21 +291,6 @@ class NodeManager(
         try {
             minY = min(minY, nodes.value.filter { it.x >= 90 }.minOf { it.y })
             maxY = max(maxY, nodes.value.filter { it.x >= 90 }.maxOf { it.y })
-        } catch (e: Exception) {
-            Log.e("NodeManager", "Error resetting max and min values: $e")
-            // set to default values
-            minY = MAX_Y
-            maxY = 0f
-        }
-    }
-
-    /**
-     * Reset the max and min values by finding the max and min values in the current nodes.
-     */
-    fun resetMaxAndMinValues() {
-        try {
-            minY = nodes.value.filter { it.x >= 90 }.minOf { it.y }
-            maxY = nodes.value.filter { it.x >= 90 }.maxOf { it.y }
         } catch (e: Exception) {
             Log.e("NodeManager", "Error resetting max and min values: $e")
             // set to default values
